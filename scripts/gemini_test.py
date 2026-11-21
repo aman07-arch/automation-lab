@@ -1,12 +1,17 @@
 import os
 import time
+from pathlib import Path
+
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load the .env that sits one folder above /scripts, and let it override anything stale
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 API_KEY = os.getenv("GEMINI_API_KEY")
-MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "").split(",") if m.strip()]
+RAW_MODELS = os.getenv("GEMINI_MODELS", "")
+MODELS = [m.strip() for m in RAW_MODELS.split(",") if m.strip()]
 
 RETRY_CODES = (429, 500, 503, 504)  # temporary problems worth retrying
 
@@ -27,30 +32,36 @@ def ask_gemini(prompt):
                 continue
 
             if response.status_code == 200:
-                data = response.json()
                 try:
+                    data = response.json()
                     return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                except (KeyError, IndexError):
-                    print(f"[{model}] unexpected response: {data}")
-                    break  # move on to the next model
+                except (KeyError, IndexError, ValueError):
+                    print(f"[{model}] unexpected response: {response.text[:300]}")
+                    break  # move to the next model
 
             if response.status_code in RETRY_CODES:
                 print(f"[{model}] try {attempt}: busy (status {response.status_code}), waiting...")
                 time.sleep(5 * attempt)
                 continue
 
-            # any other error (wrong key, wrong model name) will not fix itself by retrying
-            print(f"[{model}] error {response.status_code}: {response.text[:300]}")
+            # 400/403/404 will not fix themselves by retrying
+            print(f"[{model}] error {response.status_code}: {response.text[:200]}")
             break
-
-        print(f"Giving up on {model}, trying the next one...")
 
     return None
 
 
 if __name__ == "__main__":
+    print("Reading .env from:", ENV_PATH)
+    print("Models I will try:", MODELS)
+
+    if not API_KEY:
+        raise SystemExit("GEMINI_API_KEY is missing from .env")
+    if not MODELS:
+        raise SystemExit("GEMINI_MODELS is empty or missing in .env")
+
     answer = ask_gemini("Write a polite 30-word reply to someone asking about fees for a coaching batch.")
     if answer:
         print("AI says:", answer)
     else:
-        print("All models failed. Try again in a few minutes.")
+        print("All models in GEMINI_MODELS failed.")
